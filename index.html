@@ -1,0 +1,1286 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>圣翼传说 - H5版</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;user-select:none}
+body{background:#141220;color:#f0ece0;font-family:'PingFang SC','Microsoft YaHei',sans-serif;overflow:hidden;touch-action:none}
+#game{position:fixed;inset:0;width:100%;height:100%;display:block}
+/* iOS安全区 */
+.safe-bottom{padding-bottom:env(safe-area-inset-bottom,0)}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+// ============================================================
+// 圣翼传说 H5版 - 像素风传奇刷装RPG
+// ============================================================
+
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+let W, H, RATE; // 屏幕尺寸和缩放比例
+
+// 自适应尺寸
+function resize() {
+  W = window.innerWidth;
+  H = window.innerHeight;
+  canvas.width = W;
+  canvas.height = H;
+  RATE = Math.min(W / 400, H / 700);
+  draw();
+}
+window.addEventListener('resize', resize);
+
+// ============================================================
+// 颜色
+// ============================================================
+const C = {
+  bg: '#14121e', panel: '#1e1c2e', border: '#504e68',
+  gold: '#ffc832', orange: '#ff8c00', red: '#ff3c3c', green: '#50dc64',
+  blue: '#50a0ff', purple: '#b450ff', white: '#f0ece0', gray: '#7870a0',
+  dark: '#32304a',
+  // 职业
+  warrior: '#ff5050', mage: '#50a0ff', archer: '#50dc64',
+  // 装备品质
+  q: {'白':'#c8c8c8','绿':'#50dc64','蓝':'#50a0ff','紫':'#b450ff','橙':'#ff8c00','红':'#ff3232'}
+};
+
+// ============================================================
+// 职业数据
+// ============================================================
+const CLASSES = {
+  warrior: {name:'战士',color:C.warrior,hp:150,mp:50,atk:25,def:15,crit:0.05,combo:0,dodge:0.05,skill:'狂暴斩',skillDmg:2.0,desc:'高血量/物理'},
+  mage:    {name:'法师',color:C.mage,   hp:80, mp:120,atk:35,def:5, crit:0.10,combo:0,dodge:0.08,skill:'烈焰风暴',skillDmg:2.5,desc:'高爆发/魔法'},
+  archer:  {name:'弓手',color:C.archer, hp:100,mp:80, atk:22,def:8, crit:0.15,combo:0.30,dodge:0.12,skill:'穿云箭',skillDmg:1.8,desc:'高暴击/连击'}
+};
+
+// ============================================================
+// 装备
+// ============================================================
+const QUALITY_LIST = ['白','绿','蓝','紫','橙','红'];
+const SLOTS = ['武器','衣服','头盔','项链','手镯','手镯2','戒指','戒指2','护腿','鞋子'];
+const TPL = {
+  '武器': [['裁决之杖','橙'],['骨玉权杖','蓝'],['炼狱','紫'],['青铜剑','绿'],['木剑','白'],['屠龙刀','红']],
+  '衣服': [['重甲衣','橙'],['魔法袍','蓝'],['皮甲','绿'],['布衣','白']],
+  '头盔': [['骑士头盔','橙'],['魔法帽','蓝'],['皮帽','绿'],['布帽','白']],
+  '项链': [['生命项链','橙'],['魔力项链','蓝'],['敏捷项链','绿'],['铁链','白']],
+  '手镯': [['力量手镯','橙'],['智慧手镯','蓝'],['守护手镯','绿'],['布镯','白']],
+  '手镯2':[['攻击手镯','橙'],['魔法手镯','蓝'],['敏捷手镯','绿'],['铁镯','白']],
+  '戒指': [['麻痹戒指','橙'],['护身戒指','蓝'],['生命戒指','绿'],['铁戒','白']],
+  '戒指2':[['复活戒指','橙'],['隐身戒指','蓝'],['攻击戒指','绿'],['铜戒','白']],
+  '护腿': [['骑士护腿','橙'],['魔法护腿','蓝'],['皮护腿','绿'],['布裤','白']],
+  '鞋子': [['骑士战靴','橙'],['魔法之靴','蓝'],['轻灵之靴','绿'],['布鞋','白']]
+};
+const STAT_NAME = {atk:'攻击',def:'防御',hp:'生命',crit:'暴',combo:'连',dodge:'闪'};
+
+function makeEquip(slot, name, quality, level) {
+  const qIdx = QUALITY_LIST.indexOf(quality);
+  const base = (qIdx+1)*(3+level);
+  let stats = {};
+  if(slot=='武器') stats={atk:base};
+  else if(slot=='衣服') stats={def:base,hp:base*2};
+  else if(['头盔','护腿','鞋子'].includes(slot)) stats={def:base>>1,hp:base};
+  else if(slot=='项链') stats={hp:base*3,atk:base>>1};
+  else if(slot.includes('手镯')) stats={atk:base>>1,def:base>>1,crit:qIdx*0.02};
+  else if(slot.includes('戒指')) {
+    const choices=[{atk:base},{def:base},{hp:base*2}];
+    stats=choices[Math.floor(Math.random()*choices.length)];
+  }
+  return {slot,name,quality,level,stats,enhanced:0};
+}
+
+// ============================================================
+// 地图
+// ============================================================
+const MAPS = [
+  {name:'银杏山谷',level:[1,5],monsters:[
+    {name:'梅花鹿',hp:30,atk:5,def:2,exp:10,gold:15,drops:['白','绿']},
+    {name:'森林野猪',hp:50,atk:8,def:3,exp:20,gold:25,drops:['白','绿']}
+  ]},
+  {name:'毒蛇洞穴',level:[5,10],monsters:[
+    {name:'毒蛇',hp:80,atk:12,def:5,exp:40,gold:40,drops:['绿','蓝']},
+    {name:'毒蝎',hp:100,atk:15,def:6,exp:55,gold:55,drops:['绿','蓝']}
+  ]},
+  {name:'骷髅牢笼',level:[10,15],monsters:[
+    {name:'骷髅兵',hp:150,atk:20,def:10,exp:90,gold:80,drops:['蓝','紫']},
+    {name:'骷髅弓手',hp:120,atk:25,def:8,exp:100,gold:90,drops:['蓝','紫']}
+  ]},
+  {name:'猪七殿堂',level:[15,20],monsters:[
+    {name:'白野猪',hp:300,atk:35,def:18,exp:200,gold:200,drops:['紫','橙']},
+    {name:'邪恶毒蛇',hp:280,atk:40,def:15,exp:220,gold:220,drops:['紫','橙']}
+  ]},
+  {name:'赤月深渊',level:[20,25],monsters:[
+    {name:'赤月恶魔',hp:600,atk:60,def:30,exp:500,gold:500,drops:['橙','红']},
+    {name:'幻影蜘蛛',hp:500,atk:65,def:25,exp:480,gold:480,drops:['橙','红']}
+  ]},
+  {name:'大秘境',level:[25,30],monsters:[
+    {name:'暗之魔主',hp:1200,atk:90,def:50,exp:1200,gold:1200,drops:['红']},
+    {name:'圣翼巨龙',hp:2000,atk:120,def:70,exp:2000,gold:2000,drops:['红']}
+  ]}
+];
+const BOSS_NAMES = ['白野猪','赤月恶魔','暗之魔主','圣翼巨龙'];
+
+function spawnMonster(mapIdx, playerLevel) {
+  const tmpl = MAPS[mapIdx].monsters[Math.floor(Math.random()*MAPS[mapIdx].monsters.length)];
+  const scale = 1+Math.max(0,playerLevel-MAPS[mapIdx].level[0])*0.12;
+  const hp = Math.floor(tmpl.hp*scale);
+  const atk = Math.floor(tmpl.atk*scale);
+  const def = Math.floor(tmpl.def*scale);
+  const isBoss = BOSS_NAMES.includes(tmpl.name);
+  return {
+    name:tmpl.name, hp, maxHp:hp, atk, def,
+    exp:Math.floor(tmpl.exp*scale), gold:Math.floor(tmpl.gold*scale),
+    drops:tmpl.drops, level:Math.max(1,Math.floor(playerLevel*scale*0.5)),
+    isBoss, extraHp: isBoss ? hp*1.5 : 0
+  };
+}
+
+function dropEquip(drops, playerLevel) {
+  if(Math.random()>0.30) return null;
+  const quality = drops[Math.floor(Math.random()*drops.length)];
+  const slot = SLOTS[Math.floor(Math.random()*SLOTS.length)];
+  const pool = TPL[slot].filter(x=>x[1]===quality);
+  const items = pool.length ? pool : TPL[slot];
+  const item = items[Math.floor(Math.random()*items.length)];
+  return makeEquip(slot, item[0], item[1], Math.max(1,playerLevel+Math.floor(Math.random()*5)-2));
+}
+
+// ============================================================
+// 玩家
+// ============================================================
+class Player {
+  constructor(cls) {
+    this.classKey = cls;
+    this.name = CLASSES[cls].name;
+    this.level = 1;
+    this.exp = 0; this.expNext = 100;
+    this.gold = 200; this.stones = 5;
+    this.equip = {}; SLOTS.forEach(s=>this.equip[s]=null);
+    this.inventory = [];
+    this.resetStats();
+  }
+  resetStats() {
+    const c = CLASSES[this.classKey];
+    this.maxHp = c.hp; this.hp = this.maxHp;
+    this.maxMp = c.mp; this.mp = this.maxMp;
+    this.baseAtk = c.atk; this.baseDef = c.def;
+    this.baseCrit = c.crit; this.baseCombo = c.combo; this.baseDodge = c.dodge;
+  }
+  get atk() {
+    let v = this.baseAtk+SLOTS.reduce((s,k)=>{
+      const e=this.equip[k]; return s+(e?(e.stats.atk||0)+e.enhanced*2:0);
+    },0); return Math.max(1,Math.floor(v));
+  }
+  get def() {
+    let v = this.baseDef+SLOTS.reduce((s,k)=>{
+      const e=this.equip[k]; return s+(e?(e.stats.def||0)+e.enhanced*2:0);
+    },0); return Math.max(0,Math.floor(v));
+  }
+  get maxHpTotal() {
+    let v = this.maxHp+SLOTS.reduce((s,k)=>{
+      const e=this.equip[k]; return s+(e?(e.stats.hp||0)+e.enhanced*5:0);
+    },0); return Math.max(10,Math.floor(v));
+  }
+  get crit() { return Math.min(0.8, this.baseCrit+SLOTS.reduce((s,k)=>{const e=this.equip[k];return s+(e?(e.stats.crit||0):0);},0)); }
+  get combo() { return Math.min(0.9, this.baseCombo+SLOTS.reduce((s,k)=>{const e=this.equip[k];return s+(e?(e.stats.combo||0):0);},0)); }
+  get dodge() { return Math.min(0.5, this.baseDodge+SLOTS.reduce((s,k)=>{const e=this.equip[k];return s+(e?(e.stats.dodge||0):0);},0)); }
+  calcDmg(targetDef, skill) {
+    const c = CLASSES[this.classKey];
+    let dmg = this.atk;
+    if(skill) dmg = Math.floor(dmg*c.skillDmg);
+    dmg -= Math.floor(targetDef/2);
+    dmg = Math.max(1, dmg+Math.floor(Math.random()*9)-3);
+    const crit = Math.random()<this.crit;
+    if(crit) dmg = Math.floor(dmg*2);
+    return {dmg, crit};
+  }
+  gainExp(amount) {
+    const leveled=[];
+    this.exp+=amount;
+    while(this.exp>=this.expNext) {
+      this.exp-=this.expNext;
+      this.level++;
+      this.expNext=Math.floor(this.expNext*1.5);
+      const c=CLASSES[this.classKey];
+      this.maxHp+=Math.floor(c.hp/5); this.maxMp+=Math.floor(c.mp/5);
+      this.baseAtk+=2; this.baseDef+=1;
+      this.hp=this.maxHpTotal; this.mp=this.maxMp;
+      leveled.push(this.level);
+    }
+    return leveled;
+  }
+  save() {
+    localStorage.setItem('sycs_save', JSON.stringify({
+      classKey:this.classKey, level:this.level, exp:this.exp, expNext:this.expNext,
+      gold:this.gold, stones:this.stones, maxHp:this.maxHp, maxMp:this.maxMp,
+      hp:this.hp, mp:this.mp, baseAtk:this.baseAtk, baseDef:this.baseDef,
+      baseCrit:this.baseCrit, baseCombo:this.baseCombo, baseDodge:this.baseDodge,
+      equip:this.equip, inventory:this.inventory, currentMap:game.currentMap
+    }));
+  }
+  static load() {
+    const d = localStorage.getItem('sycs_save');
+    if(!d) return null;
+    try {
+      const data = JSON.parse(d);
+      const p = new Player(data.classKey||'warrior');
+      Object.assign(p, data);
+      return p;
+    } catch(e) { return null; }
+  }
+}
+
+// ============================================================
+// 绘制工具
+// ============================================================
+function rr(x,y,w,h,r,fill,stroke,bw) {
+  ctx.beginPath();
+  ctx.roundRect(x,y,w,h,r);
+  if(fill) {ctx.fillStyle=fill; ctx.fill();}
+  if(stroke) {ctx.strokeStyle=stroke; ctx.lineWidth=bw||1; ctx.stroke();}
+}
+
+function text(t,x,y,color,size,align,bold) {
+  ctx.fillStyle=color||C.white;
+  ctx.font=`${bold?'bold ':''}${Math.round(size)}px 'PingFang SC','Microsoft YaHei',sans-serif`;
+  ctx.textAlign=align||'center';
+  ctx.textBaseline='middle';
+  ctx.fillText(t,x,y);
+}
+
+function pixelChar(cx,cy,color,scale=1) {
+  const rows=['  XX  ',' XXXX ','XXXXXX','  XX  ',' X  X '];
+  ctx.fillStyle=color;
+  rows.forEach((row,dy)=>{
+    [...row].forEach((ch,dx)=>{
+      if(ch==='X') ctx.fillRect(cx-15*scale+dx*6*scale, cy-20*scale+dy*6*scale, 5*scale, 5*scale);
+    });
+  });
+}
+
+function monsterChar(cx,cy,name,scale=1) {
+  const colors={
+    '梅花鹿':[180,140,80],'森林野猪':[120,80,60],'毒蛇':[80,160,80],
+    '毒蝎':[140,100,40],'骷髅兵':[200,200,180],'骷髅弓手':[180,180,200],
+    '白野猪':[240,220,200],'邪恶毒蛇':[100,200,100],'赤月恶魔':[200,40,40],
+    '幻影蜘蛛':[160,60,160],'暗之魔主':[80,20,80],'圣翼巨龙':[255,200,0]
+  };
+  const c = colors[name]||[180,120,80];
+  const [r,g,b]=c;
+  const rows=['  XXXX  ',' XXXXXX ','XXXXXXXX',' XXXXXX ','  X  X  '];
+  ctx.fillStyle=`rgb(${r},${g},${b})`;
+  rows.forEach((row,dy)=>{
+    [...row].forEach((ch,dx)=>{
+      if(ch==='X') ctx.fillRect(cx-24*scale+dx*7*scale, cy-20*scale+dy*7*scale, 6*scale, 6*scale);
+    });
+  });
+}
+
+function bar(x,y,w,h,val,max,color,bgColor) {
+  rr(x,y,w,h,4,bgColor||'#321818');
+  if(max>0) rr(x,y,Math.max(2,w*Math.max(0,val/max)),h,4,color);
+}
+
+function btn(x,y,w,h,label,color,textColor,isHover) {
+  rr(x,y,w,h,8,isHover?color:C.dark,textColor||C.gold,2);
+  text(label,x+w/2,y+h/2,isHover?'#fff':textColor||C.gold,Math.min(16,h*0.4),'center',isHover);
+  return {x,y,w,h};
+}
+
+function qualityColor(q) { return C.q[q]||C.white; }
+
+// ============================================================
+// 场景状态
+// ============================================================
+const game = {
+  scene: 'start',     // start, main, battle, inventory, equip, strengthen, map, shop, gameover
+  player: null,
+  currentMap: 0,
+  monster: null,
+  battleLog: [],
+  battleEnd: false,
+  winner: null,
+  msg: null,
+  msgTimer: 0,
+  invPage: 0,
+  invFilter: 'all',   // all, equip, item
+  shake: 0,
+  shakeX: 0, shakeY: 0,
+  autoCount: 0,
+  fastMode: false,
+  kills: 0,
+  selectedClass: null,
+  hoverBtn: null,
+  tapFeedback: null,
+  animTime: 0,
+  lastSave: 0
+};
+
+function showMsg(txt, color) {
+  game.msg=txt; game.msgTimer=2.0;
+  game.tapFeedback={text:txt,color:color||C.gold,t:1.5};
+}
+
+function shake() { game.shake=0.15; }
+
+// ============================================================
+// 触摸输入
+// ============================================================
+let touchStartX=0, touchStartY=0;
+canvas.addEventListener('touchstart',e=>{
+  e.preventDefault();
+  const t=e.touches[0];
+  touchStartX=t.clientX; touchStartY=t.clientY;
+  handleTap(t.clientX, t.clientY);
+},{passive:false});
+
+canvas.addEventListener('touchmove',e=>{
+  e.preventDefault();
+  const t=e.touches[0];
+  game.hoverBtn=null;
+  // hover效果
+  draw();
+},{passive:false});
+
+canvas.addEventListener('touchend',e=>{
+  e.preventDefault();
+  game.hoverBtn=null;
+  draw();
+},{passive:false});
+
+// 鼠标支持（PC预览）
+canvas.addEventListener('mousemove',e=>{
+  game.hoverBtn=getBtnAt(e.clientX, e.clientY);
+  draw();
+});
+canvas.addEventListener('click',e=>handleTap(e.clientX, e.clientY));
+canvas.addEventListener('touchstart',e=>{
+  e.preventDefault();
+  const t=e.touches[0];
+  handleTap(t.clientX,t.clientY);
+},{passive:false});
+
+// 获取点击位置的按钮
+function getBtnAt(x,y) {
+  return null; // 简化：draw时动态检测
+}
+
+function handleTap(x,y) {
+  game.animTime=0;
+  const gs=game.scene;
+  if(gs==='start') onTapStart(x,y);
+  else if(gs==='main') onTapMain(x,y);
+  else if(gs==='battle') onTapBattle(x,y);
+  else if(gs==='inventory') onTapInventory(x,y);
+  else if(gs==='equip') onTapEquip(x,y);
+  else if(gs==='strengthen') onTapStrengthen(x,y);
+  else if(gs==='map') onTapMap(x,y);
+  else if(gs==='shop') onTapShop(x,y);
+  else if(gs==='gameover') onTapGameOver(x,y);
+}
+
+// ============================================================
+// 场景：开始界面
+// ============================================================
+function onTapStart(x,y) {
+  const cx=W/2;
+  if(game.selectedClass) {
+    // 开始冒险按钮
+    if(y>H*0.7 && y<H*0.82) {
+      game.scene='main';
+      game.player=new Player(game.selectedClass);
+    }
+    // 重新选择
+    if(y>H*0.82) game.selectedClass=null;
+  } else {
+    const classes=Object.keys(CLASSES);
+    const bw=Math.min(140,W/3-20);
+    const gap=20;
+    const totalW=(bw*3+gap*2);
+    const startX=(W-totalW)/2;
+    classes.forEach((k,i)=>{
+      const bx=startX+i*(bw+gap);
+      const by=H*0.38;
+      if(x>=bx&&x<=bx+bw&&y>=by&&y<=by+H*0.3) {
+        game.selectedClass=k;
+      }
+    });
+  }
+  draw();
+}
+
+// ============================================================
+// 场景：主界面
+// ============================================================
+function onTapMain(x,y) {
+  // 顶部按钮
+  if(y<H*0.1) {
+    const btns=[{n:'背包',s:'inventory'},{n:'装备',s:'equip'},{n:'强化',s:'strengthen'},{n:'地图',s:'map'},{n:'商店',s:'shop'}];
+    const bw=Math.min(70,W/5-8);
+    const totalW=bw*5+4*8;
+    const sx=(W-totalW)/2;
+    btns.forEach((b,i)=>{
+      const bx=sx+i*(bw+8);
+      if(x>=bx&&x<=bx+bw&&y>=H*0.01&&y<=H*0.09) {
+        game.scene=b.s; draw(); return;
+      }
+    });
+    // 存档按钮
+    if(x>=W-80&&x<=W-10&&y>=H*0.01&&y<=H*0.09) {
+      game.player.save();
+      showMsg('存档成功!',C.green); draw(); return;
+    }
+    return;
+  }
+  // 战斗区域
+  const bx1=W/2-100, by1=H*0.7, bw1=200, bh1=52;
+  const bx2=W/2-100, by2=H*0.7+60, bw2=200, bh2=44;
+  if(x>=bx1&&x<=bx1+bw1&&y>=by1&&y<=by1+bh1) {
+    game.scene='battle';
+    game.battleEnd=false; game.winner=null;
+    game.battleLog=[];
+    const m=spawnMonster(game.currentMap, game.player.level);
+    m.hp+=m.extraHp; m.maxHp+=m.extraHp;
+    game.monster=m;
+    game.battleLog.push(`⚔ 遭遇 ${m.name}! Lv${m.level}`);
+    draw(); return;
+  }
+  if(x>=bx2&&x<=bx2+bw2&&y>=by2&&y<=by2+bh2) {
+    game.autoCount=999;
+    game.scene='battle';
+    game.battleEnd=false; game.winner=null;
+    game.battleLog=[];
+    const m=spawnMonster(game.currentMap, game.player.level);
+    m.hp+=m.extraHp; m.maxHp+=m.extraHp;
+    game.monster=m;
+    game.battleLog.push(`⚔ 遭遇 ${m.name}! Lv${m.level}`);
+    draw(); return;
+  }
+  // 快速模式
+  if(x>=W/2-50&&x<=W/2+50&&y>=H*0.7+110&&y<=H*0.7+135) {
+    game.fastMode=!game.fastMode;
+    showMsg(game.fastMode?'⚡快速模式开启':'快速模式关闭', C.orange);
+    draw(); return;
+  }
+}
+
+function onTapGameOver(x,y) {
+  if(x>=W/2-100&&x<=W/2+100&&y>=H*0.55&&y<=H*0.65) {
+    game.scene='start';
+    game.selectedClass=null;
+    draw();
+  }
+}
+
+// ============================================================
+// 场景：战斗
+// ============================================================
+function onTapBattle(x,y) {
+  if(game.battleEnd) {
+    if(x>=W/2-100&&x<=W/2+100&&y>=H*0.68&&y<=H*0.78) {
+      doContinue();
+    }
+    return;
+  }
+  // 操作按钮
+  const actions=[
+    {label:'攻击',y:H*0.52,fn:()=>pAttack(false)},
+    {label:'技能',y:H*0.52+56,fn:()=>pSkill()},
+    {label:'道具',y:H*0.52+112,fn:()=>useItem()},
+    {label:'逃跑',y:H*0.52+168,fn:()=>tryEscape()}
+  ];
+  actions.forEach(a=>{
+    if(x>=W/2-100&&x<=W/2+100&&y>=a.y&&y<=a.y+50) a.fn();
+  });
+}
+
+function pAttack(skill) {
+  if(!game.monster||game.battleEnd) return;
+  const p=game.player;
+  const {dmg,crit}=p.calcDmg(game.monster.def,skill);
+  game.monster.hp-=dmg;
+  const sname=skill?CLASSES[p.classKey].skill:'攻击';
+  const critStr=crit?' 💥暴击!':'';
+  addLog(`你 ${sname} → ${game.monster.name}: -${dmg} HP${critStr}`);
+  shake();
+  if(game.monster.hp<=0) { win(); return; }
+  setTimeout(mAttack, game.fastMode?100:600);
+}
+
+function pSkill() {
+  if(!game.monster||game.battleEnd) return;
+  if(game.player.mp>=30) {
+    game.player.mp-=30;
+    pAttack(true);
+  } else {
+    addLog(`MP不足! 需要30点`);
+    setTimeout(mAttack,300);
+  }
+}
+
+function mAttack() {
+  if(!game.monster||game.battleEnd) return;
+  const p=game.player;
+  if(Math.random()<p.dodge) {
+    addLog(`你闪避了 ${game.monster.name} 的攻击!`);
+  } else {
+    const dmg=Math.max(1,game.monster.atk-Math.floor(p.def/2)+Math.floor(Math.random()*6)-2);
+    p.hp-=dmg;
+    addLog(`${game.monster.name} → 你: -${dmg} HP`);
+    shake();
+  }
+  if(p.hp<=0) { lose(); return; }
+  if(game.fastMode) setTimeout(autoAction, 100);
+}
+
+function tryEscape() {
+  if(Math.random()<0.5) {
+    addLog('>> 成功逃脱!');
+    setTimeout(()=>{ game.scene='main'; draw(); }, 500);
+  } else {
+    addLog('>> 逃脱失败!');
+    setTimeout(mAttack,400);
+  }
+}
+
+function useItem() {
+  const usable=game.player.inventory.findIndex(it=>it.name.includes('血瓶')||it.name.includes('蓝瓶'));
+  if(usable>=0) {
+    const item=game.player.inventory.splice(usable,1)[0];
+    if(item.name.includes('血瓶')) {
+      const heal={'小型血瓶':50,'中型血瓶':150,'大型血瓶':400}[item.name]||30;
+      game.player.hp=Math.min(game.player.maxHpTotal,game.player.hp+heal);
+      addLog(`使用 ${item.name}: +${heal} HP`);
+    } else {
+      const restore={'小型蓝瓶':50,'中型蓝瓶':150}[item.name]||30;
+      game.player.mp=Math.min(game.player.maxMp,game.player.mp+restore);
+      addLog(`使用 ${item.name}: +${restore} MP`);
+    }
+    setTimeout(mAttack,400);
+  } else {
+    addLog('背包没有可用道具!');
+  }
+}
+
+function autoAction() {
+  if(!game.monster||game.battleEnd) return;
+  if(game.autoCount>0) {
+    pAttack(false);
+  }
+}
+
+function addLog(t) {
+  game.battleLog.push(t);
+  if(game.battleLog.length>30) game.battleLog.shift();
+  draw();
+}
+
+function win() {
+  game.battleEnd=true; game.winner='player';
+  const m=game.monster;
+  addLog(`=== 击败 ${m.name}! ===`);
+  const leveled=game.player.gainExp(m.exp);
+  leveled.forEach(lv=>addLog(`★☆ 升级! Lv.${lv} ☆★`));
+  game.player.gold+=m.gold;
+  addLog(`+${m.gold} 金币`);
+  if(Math.random()<0.25) {
+    const n=Math.floor(Math.random()*3)+1;
+    game.player.stones+=n;
+    addLog(`+${n} 强化石`);
+  }
+  const item=dropEquip(m.drops,game.player.level);
+  if(item) {
+    game.player.inventory.push(item);
+    addLog(`★ 获得 ${item.name}(${item.quality})!`);
+  }
+  game.kills++;
+  game.player.hp=Math.min(game.player.maxHpTotal, game.player.hp+Math.floor(game.player.maxHpTotal/2));
+  game.player.mp=game.player.maxMp;
+  addLog('点击 [继续] 按钮...');
+  draw();
+}
+
+function lose() {
+  game.battleEnd=true; game.winner='monster';
+  game.player.hp=1;
+  const expL=Math.floor(game.player.exp/4);
+  const goldL=Math.floor(game.player.gold/10);
+  game.player.exp=Math.max(0,game.player.exp-expL);
+  game.player.gold=Math.max(0,game.player.gold-goldL);
+  addLog(`你被 ${game.monster.name} 击败了...`);
+  addLog(`损失 ${expL}经验 ${goldL}金币`);
+  addLog('点击 [继续] 按钮...');
+  draw();
+}
+
+function doContinue() {
+  game.scene='main';
+  game.monster=null;
+  if(game.winner==='monster') {
+    game.player.hp=Math.floor(game.player.maxHpTotal/3);
+    game.player.mp=Math.floor(game.player.maxMp/2);
+  }
+  if(game.autoCount>0) {
+    game.autoCount--;
+    setTimeout(()=>{
+      game.scene='battle';
+      game.battleEnd=false; game.winner=null;
+      game.battleLog=[];
+      const m=spawnMonster(game.currentMap, game.player.level);
+      m.hp+=m.extraHp; m.maxHp+=m.extraHp;
+      game.monster=m;
+      game.battleLog.push(`⚔ 遭遇 ${m.name}! Lv${m.level}`);
+      draw();
+    }, 300);
+  }
+  draw();
+}
+
+// ============================================================
+// 场景：背包
+// ============================================================
+function onTapInventory(x,y) {
+  // 返回/分页
+  if(y<H*0.1) {
+    if(x>=W-80) { game.scene='main'; draw(); return; }
+    const items=game.player.inventory;
+    const perPg=8;
+    const pages=Math.max(1,Math.ceil(items.length/perPg));
+    if(x>=20&&x<=70&&y>=H*0.01&&y<=H*0.09) {
+      game.invPage=Math.max(0,game.invPage-1); draw(); return;
+    }
+    if(x>=80&&x<=130&&y>=H*0.01&&y<=H*0.09) {
+      game.invPage=Math.min(pages-1,game.invPage+1); draw(); return;
+    }
+    return;
+  }
+  // 物品点击
+  const perPg=8;
+  const start=game.invPage*perPg;
+  const items=game.player.inventory;
+  const bx0=W*0.08;
+  const itemW=Math.min(150,W*0.38);
+  const gapX=(W-bx0*2-itemW*2)/(3);
+  const bx1=bx0;
+  const bx2=bx0+itemW+gapX;
+  const by0=H*0.16;
+  const gapY=H*0.01;
+  const itemH=(H*0.82-by0-gapY*3)/4;
+  for(let i=0;i<perPg;i++) {
+    const idx=start+i;
+    if(idx>=items.length) break;
+    const col=i%2;
+    const row=Math.floor(i/2);
+    const bx=col===0?bx1:bx2;
+    const by=by0+row*(itemH+gapY);
+    if(x>=bx&&x<=bx+itemW&&y>=by&&y<=by+itemH) {
+      const item=items[idx];
+      const usable=item.name.includes('血瓶')||item.name.includes('蓝瓶');
+      if(usable) {
+        if(item.name.includes('血瓶')) {
+          const heal={'小型血瓶':50,'中型血瓶':150,'大型血瓶':400}[item.name]||30;
+          game.player.hp=Math.min(game.player.maxHpTotal,game.player.hp+heal);
+          showMsg(`+${heal} HP`,C.green);
+          items.splice(idx,1);
+        } else {
+          const restore={'小型蓝瓶':50,'中型蓝瓶':150}[item.name]||30;
+          game.player.mp=Math.min(game.player.maxMp,game.player.mp+restore);
+          showMsg(`+${restore} MP`,C.blue);
+          items.splice(idx,1);
+        }
+      } else {
+        // 穿戴
+        equipItem(idx);
+      }
+      draw(); return;
+    }
+  }
+}
+
+function equipItem(idx) {
+  const item=game.player.inventory.splice(idx,1)[0];
+  const slot=item.slot;
+  const old=game.player.equip[slot];
+  game.player.equip[slot]=item;
+  if(old) game.player.inventory.push(old);
+  showMsg(`已穿戴: ${item.name}`,C.green);
+  draw();
+}
+
+// ============================================================
+// 场景：装备
+// ============================================================
+function onTapEquip(x,y) {
+  if(y<H*0.1) { game.scene='main'; draw(); return; }
+  // 装备槽
+  const cols=2;
+  const rows=5;
+  const bx0=W*0.03;
+  const bx1=W*0.53;
+  const slotW=W*0.44;
+  const slotH=H*0.13;
+  const gap=H*0.01;
+  const by0=H*0.12;
+  SLOTS.forEach((slot,i)=>{
+    const col=i%2;
+    const row=Math.floor(i/2);
+    const bx=col===0?bx0:bx1;
+    const by=by0+row*(slotH+gap);
+    if(x>=bx&&x<=bx+slotW&&y>=by&&y<=by+slotH) {
+      if(game.player.equip[slot]) {
+        const item=game.player.equip[slot];
+        game.player.equip[slot]=null;
+        game.player.inventory.push(item);
+        showMsg(`已卸下: ${item.name}`,C.gray);
+        draw();
+      }
+    }
+  });
+}
+
+// ============================================================
+// 场景：强化
+// ============================================================
+function onTapStrengthen(x,y) {
+  if(y<H*0.1) { game.scene='main'; draw(); return; }
+  const equipped=SLOTS.filter(s=>game.player.equip[s]);
+  const cols=3;
+  const bx0=W*0.03;
+  const slotW=W*0.3;
+  const gapX=(W-bx0*2-slotW*3)/4;
+  const slotH=H*0.18;
+  const by0=H*0.15;
+  const gapY=H*0.02;
+  equipped.forEach((slot,i)=>{
+    const col=i%3;
+    const row=Math.floor(i/3);
+    const bx=bx0+col*(slotW+gapX);
+    const by=by0+row*(slotH+gapY);
+    if(x>=bx&&x<=bx+slotW&&y>=by&&y<=by+slotH) {
+      const item=game.player.equip[slot];
+      const cost=item.enhanced+1;
+      if(game.player.stones>=cost) {
+        game.player.stones-=cost;
+        item.enhanced++;
+        showMsg(`强化+${item.enhanced}成功!`,C.green);
+      } else {
+        showMsg(`强化石不足! 需要${cost}个`,C.red);
+      }
+      draw();
+    }
+  });
+}
+
+// ============================================================
+// 场景：地图
+// ============================================================
+function onTapMap(x,y) {
+  if(y<H*0.1) { game.scene='main'; draw(); return; }
+  const cols=2;
+  const rows=3;
+  const bx0=W*0.03;
+  const gapX=(W-bx0*2)/3;
+  const mapW=gapX;
+  const mapH=H*0.25;
+  const by0=H*0.13;
+  const gapY=H*0.015;
+  MAPS.forEach((m,i)=>{
+    const col=i%2;
+    const row=Math.floor(i/2);
+    const bx=bx0+col*(mapW+gapX);
+    const by=by0+row*(mapH+gapY);
+    if(x>=bx&&x<=bx+mapW&&y>=by&&y<=by+mapH) {
+      game.currentMap=i;
+      game.player.hp=game.player.maxHpTotal;
+      game.player.mp=game.player.maxMp;
+      game.scene='main';
+      showMsg(`传送到: ${m.name}`,C.blue);
+      draw();
+    }
+  });
+}
+
+// ============================================================
+// 场景：商店
+// ============================================================
+function onTapShop(x,y) {
+  if(y<H*0.1) { game.scene='main'; draw(); return; }
+  const goods=[
+    {name:'小型血瓶',type:'hp',val:50,cost:30,desc:'恢复50HP'},
+    {name:'中型血瓶',type:'hp',val:150,cost:80,desc:'恢复150HP'},
+    {name:'大型血瓶',type:'hp',val:400,cost:120,desc:'恢复400HP'},
+    {name:'小型蓝瓶',type:'mp',val:50,cost:30,desc:'恢复50MP'},
+    {name:'中型蓝瓶',type:'mp',val:150,cost:80,desc:'恢复150MP'},
+    {name:'强化石',type:'stone',val:1,cost:0,stoneCost:30,desc:'+1强化石'}
+  ];
+  const cols=2;
+  const bx0=W*0.03;
+  const gapX=(W-bx0*2)/3;
+  const goodW=gapX;
+  const goodH=H*0.24;
+  const by0=H*0.14;
+  const gapY=H*0.015;
+  goods.forEach((g,i)=>{
+    const col=i%2;
+    const row=Math.floor(i/3);
+    const bx=bx0+col*(goodW+gapX);
+    const by=by0+row*(goodH+gapY);
+    if(x>=bx&&x<=bx+goodW&&y>=by&&y<=by+goodH) {
+      if(g.stoneCost) {
+        if(game.player.stones>=g.stoneCost) {
+          game.player.stones-=g.stoneCost;
+          if(g.type==='stone') game.player.stones+=g.val;
+          else if(g.type==='hp') {
+            game.player.maxHp+=g.val; game.player.hp=Math.min(game.player.maxHpTotal,game.player.hp+g.val);
+          } else if(g.type==='mp') {
+            game.player.maxMp+=g.val; game.player.mp=Math.min(game.player.maxMp,game.player.mp+g.val);
+          }
+          showMsg(`购买: ${g.name}`,C.green);
+        } else {
+          showMsg(`强化石不足! 需要${g.stoneCost}个`,C.red);
+        }
+      } else {
+        if(game.player.gold>=g.cost) {
+          game.player.gold-=g.cost;
+          if(g.type==='hp') game.player.hp=Math.min(game.player.maxHpTotal,game.player.hp+g.val);
+          else if(g.type==='mp') game.player.mp=Math.min(game.player.maxMp,game.player.mp+g.val);
+          showMsg(`购买: ${g.name}`,C.green);
+        } else {
+          showMsg('金币不足!',C.red);
+        }
+      }
+      draw();
+    }
+  });
+}
+
+// ============================================================
+// 绘制
+// ============================================================
+function draw() {
+  ctx.clearRect(0,0,W,H);
+  ctx.fillStyle=C.bg;
+  ctx.fillRect(0,0,W,H);
+  game.animTime=(game.animTime||0)+0.016;
+  // 震动
+  if(game.shake>0) {
+    game.shake-=0.016;
+    game.shakeX=(Math.random()-0.5)*4;
+    game.shakeY=(Math.random()-0.5)*3;
+  } else { game.shakeX=0; game.shakeY=0; }
+  ctx.save();
+  ctx.translate(game.shakeX, game.shakeY);
+  const gs=game.scene;
+  if(gs==='start') drawStart();
+  else if(gs==='main') drawMain();
+  else if(gs==='battle') drawBattle();
+  else if(gs==='inventory') drawInventory();
+  else if(gs==='equip') drawEquipPage();
+  else if(gs==='strengthen') drawStrengthenPage();
+  else if(gs==='map') drawMapPage();
+  else if(gs==='shop') drawShopPage();
+  else if(gs==='gameover') drawGameOver();
+  ctx.restore();
+  // 全局消息
+  if(game.msgTimer>0) {
+    game.msgTimer-=0.016;
+    const alpha=Math.min(1,game.msgTimer*0.8)*255;
+    ctx.globalAlpha=alpha/255;
+    ctx.fillStyle='rgba(0,0,0,0.7)';
+    ctx.beginPath();
+    ctx.roundRect(W/2-120,H/2-35,240,50,10);
+    ctx.fill();
+    text(game.msg,W/2,H/2,C.gold,18);
+    ctx.globalAlpha=1;
+  }
+  // 点击反馈
+  if(game.tapFeedback&&game.tapFeedback.t>0) {
+    game.tapFeedback.t-=0.02;
+    const alpha=game.tapFeedback.t;
+    ctx.globalAlpha=alpha;
+    text(game.tapFeedback.text,W/2,H*0.45,game.tapFeedback.color,15);
+    ctx.globalAlpha=1;
+  }
+}
+
+// ---- 开始界面 ----
+function drawStart() {
+  const cx=W/2;
+  text('圣翼传说', cx, H*0.1, C.gold, Math.min(40,W*0.1),'center',true);
+  text('H5单机版 · 像素风传奇RPG', cx, H*0.18, C.orange, Math.min(14,W*0.035));
+  if(game.selectedClass) {
+    const cls=CLASSES[game.selectedClass];
+    text(`已选: ${cls.name}`, cx, H*0.27, cls.color, Math.min(28,W*0.07),'center',true);
+    pixelChar(cx, H*0.38, cls.color, RATE*0.8);
+    text(cls.desc, cx, H*0.47, C.gray, Math.min(13,W*0.033));
+    const b1=btn(cx-100, H*0.72, 200, 52,'开始冒险!',C.dark,C.gold,true);
+    btn(cx-100, H*0.82, 200, 40,'重新选择',C.dark,C.gray);
+  } else {
+    text('选择职业', cx, H*0.27, C.white, Math.min(22,W*0.055),'center',true);
+    const classes=Object.keys(CLASSES);
+    const bw=Math.min(130,W/3-15);
+    const gap=12;
+    const totalW=bw*3+gap*2;
+    const sx=(W-totalW)/2;
+    const by=H*0.38;
+    classes.forEach((k,i)=>{
+      const c=CLASSES[k];
+      const bx=sx+i*(bw+gap);
+      const hovered=game.hoverBtn&&game.hoverBtn.x===bx;
+      const colorAdj=hovered?c.color.map(v=>Math.min(255,v+40)):c.color;
+      rr(bx,by,bw,H*0.28,10,`rgb(${colorAdj.join(',')})`,C.gold,2);
+      text(c.name,bx+bw/2,by+H*0.07,C.white,Math.min(18,bw*0.2),'center',true);
+      text(c.desc,bx+bw/2,by+H*0.14,C.gray,Math.min(10,bw*0.12));
+      text(`攻:${c.atk} 防:${c.def}`,bx+bw/2,by+H*0.2,C.gray,Math.min(10,bw*0.12));
+      text(`暴:${(c.crit*100).toFixed(0)}%`,bx+bw/2,by+H*0.25,C.gray,Math.min(10,bw*0.12));
+    });
+    text('点击职业开始冒险', cx, H*0.72, C.gray, Math.min(13,W*0.033));
+  }
+  // 加载存档提示
+  const saved=localStorage.getItem('sycs_save');
+  if(saved) {
+    text('📁 检测到存档', cx, H*0.88, C.green, Math.min(12,W*0.03));
+    text('进入游戏后点击 [存档] 按钮即可继续', cx, H*0.92, C.gray, Math.min(10,W*0.025));
+  }
+}
+
+// ---- 主界面 ----
+function drawMain() {
+  const cx=W/2;
+  const p=game.player;
+  drawTopBar();
+  // 地图信息
+  const m=MAPS[game.currentMap];
+  rr(W*0.04,H*0.11,W*0.92,H*0.22,10,C.panel,C.border,1);
+  text('⭐'.repeat(game.currentMap+1),cx,H*0.13,C.orange,Math.min(14,W*0.035));
+  text(`📍 ${m.name}`,cx,H*0.19,C.gold,Math.min(24,W*0.06),'center',true);
+  text(`推荐等级 Lv.${m.level[0]}~${m.level[1]}`,cx,H*0.26,C.gray,Math.min(12,W*0.03));
+  const mons=m.monsters.map(x=>x.name).join(' / ');
+  text(`怪物: ${mons}`,cx,H*0.30,C.gray,Math.min(11,W*0.028));
+  text(`击杀: ${game.kills}`,cx,H*0.12,C.orange,Math.min(11,W*0.028));
+  // 角色
+  pixelChar(cx, H*0.5, CLASSES[p.classKey].color, RATE*0.9);
+  text(p.name,cx,H*0.58,C.white,Math.min(16,W*0.04),'center',true);
+  text(`Lv.${p.level} ${CLASSES[p.classKey].name}`,cx,H*0.62,C.gray,Math.min(12,W*0.03));
+  text(`攻:${p.atk} 防:${p.def}`,cx,H*0.66,C.gray,Math.min(11,W*0.028));
+  text(`暴:${(p.crit*100).toFixed(0)}% 连:${(p.combo*100).toFixed(0)}% 闪:${(p.dodge*100).toFixed(0)}%`,cx,H*0.70,C.gray,Math.min(10,W*0.025));
+  // 装备
+  const eqNames=SLOTS.filter(s=>p.equip[s]).map(s=>p.equip[s].name).join(' | ');
+  if(eqNames) text(eqNames,cx,H*0.74,C.gray,Math.min(9,W*0.023));
+  // 按钮
+  btn(cx-100,H*0.7,W*0.5,52,'⚔ 开始战斗',C.dark,C.gold);
+  const autoLabel=game.autoCount>0?`🤖 自动挂机 (${game.autoCount})`:'🤖 自动挂机';
+  btn(cx-100,H*0.7+60,W*0.5,44,autoLabel,game.autoCount>0?C.green:C.dark,C.white);
+  if(game.fastMode) text('⚡快速模式 [F]',cx,H*0.7+115,C.orange,Math.min(11,W*0.028));
+}
+
+// ---- 战斗界面 ----
+function drawBattle() {
+  const cx=W/2;
+  const p=game.player;
+  const m=game.monster;
+  drawTopBar();
+  // 战斗区
+  rr(W*0.04,H*0.11,W*0.92,H*0.40,10,'#191525',C.border,1);
+  // 怪物
+  const my=H*0.23;
+  monsterChar(cx,my,m.name,RATE*0.85);
+  bar(cx-90,H*0.32,180,14,m.hp,m.maxHp,C.red);
+  text(`${m.name} Lv${m.level}`,cx,H*0.33,C.white,Math.min(12,W*0.03));
+  text(`HP ${m.hp}/${m.maxHp}`,cx,H*0.36,C.gray,Math.min(10,W*0.025));
+  // 玩家
+  const py=H*0.54;
+  pixelChar(cx,py,CLASSES[p.classKey].color,RATE*0.8);
+  bar(cx-90,H*0.64,180,12,p.hp,p.maxHpTotal,p.hp/p.maxHpTotal<0.3?C.red:C.green);
+  text(`${p.name} Lv${p.level}`,cx,H*0.65,C.white,Math.min(12,W*0.03));
+  bar(cx-90,H*0.68,180,8,p.mp,p.maxMp,C.blue);
+  // 战斗日志
+  rr(W*0.04,H*0.72,W*0.92,H*0.22,8,C.panel,C.border,1);
+  const start=Math.max(0,game.battleLog.length-6);
+  game.battleLog.slice(start).forEach((line,i)=>{
+    let color=C.white;
+    if(line.includes('击败')||line.includes('升级')) color=C.green;
+    else if(line.includes('金币')||line.includes('强化石')||line.includes('★')) color=C.orange;
+    else if(line.includes('暴击')) color=C.purple;
+    else if(line.includes('损失')||line.includes('击败')) color=C.red;
+    text(line,W*0.08,H*0.74+i*14,color,Math.min(12,W*0.03),'left');
+  });
+  // 操作按钮
+  if(!game.battleEnd) {
+    const actions=[
+      {label:'⚔ 攻击',y:H*0.52,color:C.red},
+      {label:'✨ 技能',y:H*0.52+56,color:C.blue},
+      {label:'💊 道具',y:H*0.52+112,color:C.green},
+      {label:'🏃 逃跑',y:H*0.52+168,color:C.gray}
+    ];
+    actions.forEach(a=>{
+      const bx=cx-100;
+      rr(bx,a.y,W*0.5,50,8,C.dark,a.color,2);
+      text(a.label,cx,a.y+25,a.color,Math.min(15,W*0.038));
+    });
+  } else {
+    const msg=game.winner==='player'?'✅ 继续 [胜利]':'❌ 继续 [失败]';
+    const col=game.winner==='player'?C.green:C.red;
+    btn(cx-100,H*0.68,W*0.5,48,msg,col,C.white);
+    if(game.fastMode) {
+      setTimeout(doContinue, 300);
+    }
+  }
+}
+
+// ---- 背包界面 ----
+function drawInventory() {
+  const cx=W/2;
+  const p=game.player;
+  drawTopBar(true);
+  rr(W*0.04,H*0.11,W*0.92,H*0.85,10,C.panel,C.border,1);
+  text('🎒 背包',cx,H*0.07,C.gold,Math.min(20,W*0.05),'center',true);
+  text(`${p.inventory.length}/50 件  💰${p.gold}  💎${p.stones}`,cx,H*0.1,C.orange,Math.min(11,W*0.028));
+  const perPg=8;
+  const pages=Math.max(1,Math.ceil(p.inventory.length/perPg));
+  const start=game.invPage*perPg;
+  const bx0=W*0.08;
+  const itemW=Math.min(155,W*0.4);
+  const gapX=(W-bx0*2-itemW*2)/3;
+  const bx1=bx0;
+  const bx2=bx0+itemW+gapX;
+  const by0=H*0.16;
+  const gapY=H*0.01;
+  const itemH=(H*0.82-by0-gapY*3)/4;
+  for(let i=0;i<perPg;i++) {
+    const idx=start+i;
+    if(idx>=p.inventory.length) {
+      // 空格子
+      const col=i%2;
+      const row=Math.floor(i/2);
+      const bx=col===0?bx1:bx2;
+      const by=by0+row*(itemH+gapY);
+      rr(bx,by,itemW,itemH,6,'#191520',C.border,1);
+      continue;
+    }
+    const it=p.inventory[idx];
+    const col=i%2;
+    const row=Math.floor(i/2);
+    const bx=col===0?bx1:bx2;
+    const by=by0+row*(itemH+gapY);
+    const usable=it.name.includes('血瓶')||it.name.includes('蓝瓶');
+    const qc=qualityColor(it.quality);
+    rr(bx,by,itemW,itemH,6,C.dark,qc,1);
+    text(it.name,bx+itemW/2,by+itemH*0.2,qc,Math.min(12,itemW*0.1));
+    text(`+${it.enhanced}`,bx+itemW/2,by+itemH*0.38,C.gold,Math.min(10,itemW*0.08));
+    const statTxt=Object.entries(it.stats).map(([k,v])=>`${STAT_NAME[k]||k}+${v}`).join(' ');
+    text(statTxt,bx+6,by+itemH*0.6,C.gray,Math.min(9,itemW*0.07),'left');
+    text(usable?'[使用]':'[穿戴]',bx+itemW/2,by+itemH*0.85,C.gray,Math.min(9,itemW*0.07));
+  }
+  // 分页
+  text(`${game.invPage+1}/${pages}`,cx,H*0.9,C.white,Math.min(11,W*0.028));
+  if(game.invPage>0) btn(10,H*0.01,50,35,'◀',C.dark,C.gold);
+  if(game.invPage<pages-1) btn(70,H*0.01,50,35,'▶',C.dark,C.gold);
+}
+
+// ---- 装备界面 ----
+function drawEquipPage() {
+  const cx=W/2;
+  const p=game.player;
+  drawTopBar(true);
+  rr(W*0.04,H*0.11,W*0.92,H*0.85,10,C.panel,C.border,1);
+  text('⚔ 装备面板',cx,H*0.07,C.gold,Math.min(20,W*0.05),'center',true);
+  const bx0=W*0.03;
+  const bx1=W*0.53;
+  const slotW=W*0.44;
+  const slotH=H*0.13;
+  const gap=H*0.01;
+  const by0=H*0.12;
+  SLOTS.forEach((slot,i)=>{
+    const col=i%2;
+    const row=Math.floor(i/2);
+    const bx=col===0?bx0:bx1;
+    const by=by0+row*(slotH+gap);
+    const it=p.equip[slot];
+    rr(bx,by,slotW,slotH,6,C.dark,it?qualityColor(it.quality):C.border,1);
+    text(slot,bx+6,by+6,C.gray,Math.min(10,W*0.025),'left');
+    if(it) {
+      text(it.name,bx+slotW/2,by+slotH*0.3,qualityColor(it.quality),Math.min(11,slotW*0.08));
+      text(`+${it.enhanced}`,bx+slotW/2,by+slotH*0.5,C.gold,Math.min(10,slotW*0.07));
+      const st=Object.entries(it.stats).map(([k,v])=>`${STAT_NAME[k]||k}+${v}`).join(' ');
+      text(st,bx+6,by+slotH*0.72,C.gray,Math.min(9,slotW*0.065),'left');
+      text('[点击卸下]',bx+slotW/2,by+slotH*0.9,C.gray,Math.min(9,slotW*0.065));
+    } else {
+      text('空',bx+slotW/2,by+slotH*0.5,C.border,Math.min(13,slotW*0.1));
+    }
+  });
+  // 角色属性
+  rr(W*0.03,H*0.74,W*0.94,H*0.22,6,C.dark,C.border,1);
+  const attrs=[
+    `等级: ${p.level} 经验: ${p.exp}/${p.expNext}`,
+    `HP: ${p.hp}/${p.maxHpTotal}  MP: ${p.mp}/${p.maxMp}`,
+    `攻击: ${p.atk}  防御: ${p.def}`,
+    `暴击: ${(p.crit*100).toFixed(1)}%  连击: ${(p.combo*100).toFixed(1)}%  闪避: ${(p.dodge*100).toFixed(1)}%`,
+    `金币: ${p.gold}  强化石: ${p.stones}`
+  ];
+  attrs.forEach((a,i)=>text(a,W*0.05,H*0.77+i*15,C.white,Math.min(11,W*0.028),'left'));
+}
+
+// ---- 强化界面 ----
+function drawStrengthenPage() {
+  const cx=W/2;
+  const p=game.player;
+  drawTopBar(true);
+  rr(W*0.04,H*0.11,W*0.92,H*0.85,10,C.panel,C.border,1);
+  text('🔨 装备强化',cx,H*0.07,C.gold,Math.min(20,W*0.05),'center',true);
+  text(`💎 强化石: ${p.stones}`,cx,H*0.1,C.blue,Math.min(13,W*0.033));
+  const cols=3;
+  const bx0=W*0.03;
+  const gapX=(W-bx0*2)/4;
+  const slotW=gapX;
+  const slotH=H*0.18;
+  const by0=H*0.15;
+  const gapY=H*0.02;
+  const equipped=SLOTS.filter(s=>p.equip[s]);
+  equipped.forEach((slot,i)=>{
+    const col=i%3;
+    const row=Math.floor(i/3);
+    const bx=bx0+col*(slotW+gapX);
+    const by=by0+row*(slotH+gapY);
+    const it=p.equip[slot];
+    const qc=qualityColor(it.quality);
+    rr(bx,by,slotW,slotH,6,C.dark,qc,1);
+    text(it.name,bx+slotW/2,by+slotH*0.2,qc,Math.min(10,slotW*0.12));
+    text(slot,bx+slotW/2,by+slotH*0.38,C.gray,Math.min(8,slotW*0.09));
+    text(`+${it.enhanced}`,bx+slotW/2,by+slotH*0.55,C.gold,Math.min(11,slotW*0.13),'center',true);
+    const cost=it.enhanced+1;
+    const ok=p.stones>=cost;
+    text(`消耗:${cost}石`,bx+slotW/2,by+slotH*0.72,ok?C.blue:C.red,Math.min(9,slotW*0.1));
+    text('[强化]',bx+slotW/2,by+slotH*0.88,C.gray,Math.min(9,slotW*0.1));
+  });
+  if(!equipped.length) text('没有可强化的装备',cx,H*0.5,C.gray,Math.min(14,W*0.035));
+}
+
+// ---- 地图界面 ----
+function drawMapPage() {
+  const cx=W/2;
+  drawTopBar(true);
+  rr(W*0.04,H*0.11,W*0.92,H*0.85,10,C.panel,C.border,1);
+  text('🗺️ 选择地图',cx,H*0.07,C.gold,Math.min(20,W*0.05),'center',true);
+  const cols=2;
+  const rows=3;
+  const bx0=W*0.03;
+  const gapX=(W-bx0*2)/3;
+  const mapW=gapX;
+  const mapH=H*0.25;
+  const by0=H*0.13;
+  const gapY=H*0.015;
+  MAPS.forEach((m,i)=>{
+    const col=i%2;
+    const row=Math.floor(i/2);
+    const bx=bx0+col*(mapW+gapX);
+    const by=by0+row*(mapH+gapY);
+    const cur=(i===game.currentMap);
+    rr(bx,by,mapW,mapH,8,cur?'#324a32':C.dark,cur?C.green:(C.gold),cur?2:1);
+    text('⭐'.repeat(i+1),bx+mapW/2,by+mapH*0.12,C.orange,Math.min(12,W*0.03));
+    text(m.name,bx+mapW/2,by+mapH*0.32,cur?C.green:C.white,Math.min(15,mapW*0.1),'center',true);
+    text(`Lv.${m.level[0]}~${m.level[1]}`,bx+mapW/2,by+mapH*0.52,C.gray,Math.min(10,mapW*0.07));
+    text(m.monsters.map(x=>x.name).join('/'),bx+mapW/2,by+mapH*0.7,C.gray,Math.min(9,mapW*0.06));
+    if(cur) text('[当前]',bx+mapW/2,by+mapH*0.88,C.green,Math.min(9,mapW*0.07));
+  });
+}
+
+// ---- 商店界面 ----
+function drawShopPage() {
+  const cx=W/2;
+  const p=game.player;
+  drawTopBar(true);
+  rr(W*0.04,H*0.11,W*0.92,H*0.85,10,C.panel,C.border,1);
+  text('🏪 杂货商店',cx,H*0.07,C.gold,Math.min(20,W*0.05),'center',true);
+  text(`💰${p.gold}  💎${p.stones}`,cx,H*0.1,C.orange,Math.min(13,W*0.033));
+  const goods=[
+    {name:'小型血瓶',desc:'恢复50HP',cost:30,stoneCost:0,type:'hp'},
+    {name:'中型血瓶',desc:'恢复150HP',cost:80,stoneCost:0,type:'hp'},
+    {name:'大型血瓶',desc:'恢复400HP',cost:120,stoneCost:0,type:'hp'},
+    {name:'小型蓝瓶',desc:'恢复50MP',cost:30,stoneCost:0,type:'mp'},
+    {name:'中型蓝瓶',desc:'恢复150MP',cost:80,stoneCost:0,type:'mp'},
+    {name:'强化石',desc:'+1强化石',cost:0,stoneCost:30,type:'stone'}
+  ];
+  const cols=2;
+  const bx0=W*0.03;
+  const gapX=(W-bx0*2)/3;
+  const goodW=gapX;
+  const goodH=H*0.24;
+  const by0=H*0.14;
+  const gapY=H*0.015;
+  goods.forEach((g,i)=>{
+    const col=i%2;
+    const row=Math.floor(i/3);
+    const bx=bx0+col*(goodW+gapX);
+    const by=by0+row*(goodH+gapY);
+    rr(bx,by,goodW,goodH,8,C.dark,C.gold,1);
+    text(g.name,bx+goodW/2,by+goodH*0.2,C.gold,Math.min(13,goodW*0.09),'center',true);
+    text(g.desc,bx+goodW/2,by+goodH*0.4,C.gray,Math.min(10,goodW*0.07));
+    text(`💰${g.cost}`,bx+goodW*0.25,by+goodH*0.6,C.orange,Math.min(10,goodW*0.07));
+    if(g.stoneCost>0) text(`💎${g.stoneCost}`,bx+goodW*0.72,by+goodH*0.6,C.blue,Math.min(10,goodW*0.07));
+    text('[点击购买]',bx+goodW/2,by+goodH*0.8,C.white,Math.min(9,goodW*0.07));
+  });
+}
+
+// ---- 顶部状态栏 ----
+function drawTopBar(isPage) {
+  rr(0,0,W,H*0.1,C.panel,C.border,1);
+  const p=game.player||{};
+  text(`${p.name||''} Lv.${p.level||1} ${CLASSES[p.classKey||'warrior']?.name||''}`,W*0.02,H*0.03,C.gold,Math.min(14,W*0.035),'left',true);
+  bar(W*0.02,H*0.05,W*0.45,H*0.02,p.hp||0,p.maxHpTotal||1,C.red);
+  text(`HP ${p.hp||0}/${p.maxHpTotal||1}`,W*0.25,H*0.05,C.white,Math.min(9,W*0.023));
+  bar(W*0.02,H*0.075,W*0.45,H*0.015,p.mp||0,p.maxMp||1,C.blue);
+  text(`💰${p.gold||0}`,W*0.5,H*0.03,C.orange,Math.min(12,W*0.03),'left');
+  text(`💎${p.stones||0}`,W*0.65,H*0.03,C.blue,Math.min(12,W*0.03),'left');
+  // 导航按钮
+  if(!isPage) {
+    const navBtns=[{n:'🎒',s:'inventory'},{n:'⚔️',s:'equip'},{n:'🔨',s:'strengthen'},{n:'🗺️',s:'map'},{n:'🏪',s:'shop'}];
+    const bw=Math.min(48,W*0.12);
+    const totalW=bw*5+4*4;
+    const sx=(W-totalW)/2;
+    navBtns.forEach((b,i)=>{
+      const bx=sx+i*(bw+4);
+      const by=H*0.01;
+      const hover=game.hoverBtn&&game.hoverBtn.i===i;
+      rr(bx,by,bw,H*0.085,6,hover?C.gold:C.dark,C.gold,1);
+      text(b.n,bx+bw/2,by+H*0.045,C.white,Math.min(14,bw*0.4));
+    });
+  }
+  // 返回按钮
+  btn(W-75,H*0.01,65,35,'←返回',C.dark,C.gray);
+}
+
+// ---- 结束界面 ----
+function drawGameOver() {
+  rr(W*0.1,H*0.3,W*0.8,H*0.4,12,C.panel,C.red,2);
+  text('💀 游戏结束',W/2,H*0.38,C.red,Math.min(28,W*0.07),'center',true);
+  text('重新开始?',W/2,H*0.48,C.gray,Math.min(16,W*0.04));
+  btn(W/2-100,H*0.55,W*0.5,48,'重新开始',C.dark,C.gold);
+}
+
+// ============================================================
+// 动画循环
+// ============================================================
+function loop() {
+  draw();
+  requestAnimationFrame(loop);
+}
+
+// 自动存档
+setInterval(()=>{
+  if(game.player&&game.scene!=='start') {
+    try{game.player.save();}catch(e){}
+  }
+}, 30000);
+
+// ============================================================
+// 启动
+// ============================================================
+resize();
+loop();
+</script>
+</body>
+</html>
